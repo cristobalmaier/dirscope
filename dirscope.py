@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 DIRSCOPE - Directory & File Fuzzer
-Uso: python3 dirscope.py <url> <wordlist>
+Uso: python3 dirscope.py <url> <wordlist> [hilos]
 """
 
 import sys
@@ -19,22 +19,20 @@ GREEN  = "\033[92m"
 YELLOW = "\033[93m"
 CYAN   = "\033[96m"
 WHITE  = "\033[97m"
-BLUE   = "\033[94m"
 
-# ── Color por código de respuesta HTTP ───────────────
 STATUS_COLOR = {
-    200: GREEN,   # OK — encontrado
-    201: GREEN,   # Created
-    204: GREEN,   # No Content
-    301: CYAN,    # Redirect permanente
-    302: CYAN,    # Redirect temporal
-    307: CYAN,    # Redirect temporal
-    308: CYAN,    # Redirect permanente
-    401: YELLOW,  # Unauthorized — existe pero requiere auth
-    403: YELLOW,  # Forbidden — existe pero bloqueado
-    405: YELLOW,  # Method Not Allowed
-    500: RED,     # Error interno — puede ser interesante
-    503: RED,     # Service Unavailable
+    200: GREEN,
+    201: GREEN,
+    204: GREEN,
+    301: CYAN,
+    302: CYAN,
+    307: CYAN,
+    308: CYAN,
+    401: YELLOW,
+    403: YELLOW,
+    405: YELLOW,
+    500: RED,
+    503: RED,
 }
 
 STATUS_LABEL = {
@@ -45,7 +43,7 @@ STATUS_LABEL = {
     302: "FOUND",
     307: "REDIRECT",
     308: "PERMANENT",
-    401: "AUTH REQ",
+    401: "UNAUTH",
     403: "FORBIDDEN",
     405: "NOT ALLOWED",
     500: "SERVER ERR",
@@ -66,31 +64,35 @@ def banner():
 
 
 def probe(base_url, word):
-    """Hace una petición HTTP y devuelve (word, status, size, location)."""
+    """Hace una peticion HTTP. Devuelve (word, status, size, url) o None."""
     url = f"{base_url}/{word}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "dirscope/1.0"})
         res = urllib.request.urlopen(req, timeout=5)
-        size     = len(res.read())
-        location = res.geturl()
-        return (word, res.status, size, location)
+        size = len(res.read())
+        return (word, res.status, size, res.geturl())
     except urllib.error.HTTPError as e:
         if e.code in STATUS_COLOR:
-            return (word, e.code, 0, "")
+            return (word, e.code, 0, url)
         return None
     except:
         return None
 
 
 def load_wordlist(path):
-    """Lee el archivo de palabras, una por línea."""
     try:
         with open(path, "r", errors="ignore") as f:
-            words = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-        return words
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except FileNotFoundError:
         print(f"  {RED}[!] Wordlist no encontrada: {path}{RESET}\n")
         sys.exit(1)
+
+
+def fmt_size(size):
+    """Formatea bytes de forma legible."""
+    if size >= 1024:
+        return f"{size/1024:.1f} KB"
+    return f"{size} B"
 
 
 def main():
@@ -98,25 +100,25 @@ def main():
 
     if len(sys.argv) < 3:
         print(f"  Uso: python3 dirscope.py <url> <wordlist> [hilos]")
-        print(f"  Ej:  python3 dirscope.py http://192.168.1.1 /usr/share/wordlists/dirb/common.txt")
-        print(f"  Ej:  python3 dirscope.py http://10.0.0.1 wordlist.txt 50\n")
+        print(f"  Ej:  python3 dirscope.py http://172.17.0.2 /usr/share/wordlists/dirb/common.txt\n")
         sys.exit(0)
 
     base_url = sys.argv[1].rstrip("/")
     wordlist = sys.argv[2]
     threads  = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+    words    = load_wordlist(wordlist)
+    start    = datetime.now()
 
-    words = load_wordlist(wordlist)
+    # ── Info del escaneo ─────────────────────────────
+    print(f"  {GRAY}Target   {RESET} {BOLD}{WHITE}{base_url}{RESET}")
+    print(f"  {GRAY}Wordlist {RESET} {WHITE}{wordlist}{RESET}  {GRAY}({len(words)} palabras){RESET}")
+    print(f"  {GRAY}Hilos    {RESET} {WHITE}{threads}{RESET}")
+    print(f"  {GRAY}Inicio   {RESET} {WHITE}{start.strftime('%H:%M:%S')}{RESET}")
 
-    # Info del escaneo
-    start = datetime.now()
-    print(f"  {GRAY}Target  :{RESET} {BOLD}{WHITE}{base_url}{RESET}")
-    print(f"  {GRAY}Wordlist:{RESET} {WHITE}{wordlist}{RESET} {GRAY}({len(words)} palabras){RESET}")
-    print(f"  {GRAY}Hilos   :{RESET} {WHITE}{threads}{RESET}")
-    print(f"  {GRAY}Inicio  :{RESET} {WHITE}{start.strftime('%H:%M:%S')}{RESET}\n")
-
-    print(f"  {GRAY}{'STATUS':<12} {'SIZE':>8}   {'URL'}{RESET}")
-    print(f"  {GRAY}{'─'*65}{RESET}")
+    # ── Cabecera de tabla ────────────────────────────
+    print(f"\n  {GRAY}{'─'*68}{RESET}")
+    print(f"  {GRAY}{'STATUS':<18} {'SIZE':>8}   {'URL'}{RESET}")
+    print(f"  {GRAY}{'─'*68}{RESET}\n")
 
     found   = []
     scanned = 0
@@ -128,44 +130,43 @@ def main():
             scanned += 1
             result = future.result()
 
-            # Progreso en la misma línea
+            # Barra de progreso
             pct = int((scanned / total) * 40)
-            bar = f"[{'=' * pct}{' ' * (40 - pct)}]"
-            print(f"\r  {GRAY}{bar} {scanned}/{total}{RESET}", end="", flush=True)
+            bar = f"{'=' * pct}{' ' * (40 - pct)}"
+            print(f"\r  {GRAY}[{bar}] {scanned}/{total}{RESET}", end="", flush=True)
 
             if result:
-                word, status, size, location = result
+                word, status, size, url = result
                 color = STATUS_COLOR.get(status, WHITE)
                 label = STATUS_LABEL.get(status, str(status))
-                url   = location or f"{base_url}/{word}"
+                tag   = f"[{status} {label}]"
+                size_str = fmt_size(size)
 
-                # Limpiar la línea de progreso e imprimir resultado
+                # Limpiar barra e imprimir resultado alineado
                 print(f"\r  {' '*60}\r", end="")
-                print(f"  {BOLD}{color}[{status} {label}]{RESET}  {size:>7} bytes   {color}{url}{RESET}")
+                print(f"  {BOLD}{color}{tag:<18}{RESET} {GRAY}{size_str:>8}{RESET}   {color}{url}{RESET}")
                 found.append(result)
 
-    # Limpiar barra de progreso
-    print(f"\r  {' '*60}")
+    # Limpiar barra final
+    print(f"\r  {' '*60}\r", end="")
 
-    # Resumen
+    # ── Resumen ──────────────────────────────────────
     elapsed = (datetime.now() - start).total_seconds()
-    print(f"  {GRAY}{'─'*65}{RESET}")
-    print(f"  {BOLD}{WHITE}Resultados: {len(found)} encontrados / {total} probados{RESET}")
-    print()
+    print(f"\n  {GRAY}{'─'*68}{RESET}")
+    print(f"  {BOLD}{WHITE}{len(found)} encontrados{RESET}  {GRAY}/{RESET}  {WHITE}{total} probados{RESET}  {GRAY}|  {elapsed:.2f}s{RESET}")
+    print(f"  {GRAY}{'─'*68}{RESET}\n")
 
     if found:
-        # Agrupar por status
         by_status = {}
-        for word, status, size, location in sorted(found, key=lambda x: x[1]):
-            by_status.setdefault(status, []).append((word, size, location))
+        for w, status, size, url in sorted(found, key=lambda x: x[1]):
+            by_status.setdefault(status, []).append((size, url))
 
         for status, items in sorted(by_status.items()):
             color = STATUS_COLOR.get(status, WHITE)
             label = STATUS_LABEL.get(status, str(status))
-            print(f"  {color}{BOLD}[{status} {label}]{RESET}  {GRAY}({len(items)} rutas){RESET}")
-            for word, size, loc in items:
-                url = loc or f"{base_url}/{word}"
-                print(f"  {GRAY}  └─{RESET} {color}{url}{RESET}  {GRAY}({size} bytes){RESET}")
+            print(f"  {BOLD}{color}[{status} {label}]{RESET}  {GRAY}{len(items)} ruta(s){RESET}")
+            for size, url in items:
+                print(f"  {GRAY}  └─{RESET}  {color}{url:<50}{RESET}  {GRAY}{fmt_size(size)}{RESET}")
             print()
 
     print(f"  {GRAY}Dirscope done: {elapsed:.2f}s — {len(found)} rutas encontradas{RESET}\n")
